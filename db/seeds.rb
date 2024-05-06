@@ -7,6 +7,14 @@
 #   ["Action", "Comedy", "Drama", "Horror"].each do |genre_name|
 #     MovieGenre.find_or_create_by!(name: genre_name)
 #   end
+require 'json'
+
+unless ENV.fetch("ACTIVE_RECORD_ENCRYPTION", nil)
+  raise StandardError, <<~HELP
+    This application will not work without the 'ACTIVE_RECORD_ENCRYPTION' variable set.
+    See https://github.com/nickthecook/archyve?tab=readme-ov-file#getting-started for setup instructions.
+  HELP
+end
 
 default_user = ENV.fetch("USERNAME") { "admin@archyve.io" }
 default_password = ENV.fetch("PASSWORD") { "password" }
@@ -42,34 +50,74 @@ else
   puts("DEFAULT_CLIENT_ID and DEFAULT_API_KEY not set; not creating or updating default client.")
 end
 
+devel_model_servers = [
+  {
+    name: "localhost",
+    provider: "ollama",
+  }
+]
+
+devel_model_configs = [
+  {
+    name: "mistral:instruct",
+    model_server: "localhost",
+    model: "mistral:instruct",
+    temperature: 0.1,
+  },
+  {
+    name: "gemma:7b",
+    model_server: "localhost",
+    model: "gemma:7b",
+    temperature: 0.2,
+  },
+  {
+    name: "all-minilm",
+    model_server: "localhost",
+    model: "all-minilm",
+    embedding: true,
+  },
+  {
+    name: "nomic-embed-text",
+    model_server: "localhost",
+    model: "nomic-embed-text",
+    embedding: true,
+  }
+]
+
+provisioned_model_servers = JSON.parse(ENV.fetch("PROVISIONED_MODEL_SERVERS") {
+  Rails.env == "development" ? JSON.generate(devel_model_servers) : '[]'
+})
+
+provisioned_model_configs = JSON.parse(ENV.fetch("PROVISIONED_MODEL_CONFIGS") {
+  Rails.env == "development" ? JSON.generate(devel_model_configs) : '[]'
+})
+
+provisioned_model_servers.each do |config|
+  ModelServer.find_or_create_by!(name: config["name"]) do |ms|
+    puts "establishing model server for `#{config["name"]}` ..."
+    
+    ms.url = config.fetch("url", model_endpoint)
+    ms.provider = config.fetch("provider")
+    ms.default = config.fetch("default", false)
+  end
+end
+
+provisioned_model_configs.each do |config|
+  server = ModelServer.find_by(name: config.fetch("model_server", "localhost"))
+
+  ModelConfig.find_or_create_by!(name: config["name"], model_server: server) do |mc|
+    puts "establishing model configuration for `#{config["name"]}` ..."
+
+    mc.model = config.fetch("model", config["name"])
+    mc.temperature = config.fetch("temperature", nil)
+    mc.embedding = config.fetch("embedding", false)
+  end
+end
+
 if Rails.env == "development"
-  ModelServer.find_or_create_by!(name: "localhost") do |ms|
-    ms.url = model_endpoint
-    ms.provider = "ollama"
-  end
-
-  ModelConfig.find_or_create_by!(name: "mistral:instruct", model_server: ModelServer.first) do |mc|
-    mc.model = "mistral:instruct"
-    mc.temperature = 0.1
-  end
-
-  ModelConfig.find_or_create_by!(name: "gemma:7b", model_server: ModelServer.first) do |mc|
-    mc.model = "gemma:7b"
-    mc.temperature = 0.2
-  end
-
-  ModelConfig.find_or_create_by!(name: "all-minilm", model_server: ModelServer.first) do |mc|
-    mc.model = "all-minilm"
-    mc.embedding = true
-  end
-
-  ModelConfig.find_or_create_by!(name: "nomic-embed-text", model_server: ModelServer.first) do |mc|
-    mc.model = "nomic-embed-text"
-    mc.embedding = true
-  end
-
   if default_client
-      puts <<~TEXT
+    puts <<~TEXT
+      
       To authenticate with the default API client, set these headers:
 
       Authorization: Bearer #{default_client.api_key}

@@ -92,26 +92,34 @@ provisioned_model_configs = JSON.parse(ENV.fetch("PROVISIONED_MODEL_CONFIGS") {
   Rails.env == "development" ? JSON.generate(devel_model_configs) : '[]'
 })
 
+provisioned_model_servers_names = provisioned_model_servers.map { |ms| ms["name"] }
+provisioned_model_config_names = provisioned_model_configs.map { |mc| mc["name"] }
+
+ModelConfig.where(provisioned: true).where.not(name: provisioned_model_config_names).update(enabled: false)
+ModelServer.where(provisioned: true).where.not(name: provisioned_model_servers_names).update(enabled: false)
+
 provisioned_model_servers.each do |config|
-  ModelServer.find_or_create_by!(name: config["name"]) do |ms|
-    puts "establishing model server for `#{config["name"]}` ..."
-    
-    ms.url = config.fetch("url", model_endpoint)
-    ms.provider = config.fetch("provider")
-    ms.default = config.fetch("default", false)
-  end
+  puts "provisioning model server for `#{config["name"]}` ..."
+
+  ModelServer.find_or_create_by!(name: config["name"]).update(
+    url: config.fetch("url") { model_endpoint },
+    provider: config.fetch("provider"),
+    default: config.fetch("default") { false },
+    provisioned: true,
+  )
 end
 
 provisioned_model_configs.each do |config|
   server = ModelServer.find_by(name: config.fetch("model_server", "localhost"))
+  puts "provisioning model configuration for `#{config["name"]}` ..."
 
-  ModelConfig.find_or_create_by!(name: config["name"], model_server: server) do |mc|
-    puts "establishing model configuration for `#{config["name"]}` ..."
-
-    mc.model = config.fetch("model", config["name"])
-    mc.temperature = config.fetch("temperature", nil)
-    mc.embedding = config.fetch("embedding", false)
-  end
+  ModelConfig.find_or_create_by!(name: config["name"], model_server: server).update(
+    model: config.fetch("model") { config["name"] },
+    temperature: config.fetch("temperature") { nil },
+    embedding: config.fetch("embedding") { false },
+    default: config.fetch("default") { false },
+    provisioned: true,
+  )
 end
 
 if Rails.env == "development"
